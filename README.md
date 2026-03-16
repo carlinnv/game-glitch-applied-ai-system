@@ -25,9 +25,9 @@ It wrote the code, ran away, and now the game is unplayable.
 
 ## 📝 Document Your Experience
 
-- [ ] Describe the game's purpose.
-- [ ] Detail which bugs you found.
-- [ ] Explain what fixes you applied.
+- The purpose of this game is for a player to guess the secret number. They get 8 attempts to enter a number and are told after each guess whether their number is too high or too low. When they win, the game ends, and they can restart. 
+- I found two bugs. The first was that when the game starts, the player only has 7 attempts remaining when they should have 8. The second is that the game does not give the opposite response to guesses that are too high or too low. 
+- I set the variable that keeps track of how many guesses the player has used up to 0 at the start of the game rather than 1. I also switched the order of responses ("Too high" or "Too low") so that the player is given the correct one after guessing. 
 
 ## 📸 Demo
 
