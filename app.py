@@ -1,5 +1,7 @@
+import os
 import random
 import streamlit as st
+from ai_coach import get_ai_coach_message
 from logic_utils import check_guess, get_range_for_difficulty, parse_guess, update_score
 
 st.set_page_config(page_title="Glitchy Guesser", page_icon="🎮")
@@ -95,15 +97,32 @@ if submit:
     else:
         st.session_state.history.append(guess_int)
 
-        if st.session_state.attempts % 2 == 0:
-            secret = str(st.session_state.secret)
-        else:
-            secret = st.session_state.secret
+        outcome, _ = check_guess(guess_int, st.session_state.secret)
 
-        outcome, message = check_guess(guess_int, secret)
+        coach_message, response_source, response_reason = get_ai_coach_message(
+            difficulty=difficulty,
+            attempts_used=st.session_state.attempts,
+            attempt_limit=attempt_limit,
+            history=st.session_state.history,
+            outcome=outcome,
+            last_guess=guess_int,
+            secret=st.session_state.secret,
+            low=low,
+            high=high,
+            return_source=True,
+            return_reason=True,
+        )
 
         if show_hint:
-            st.warning(message)
+            st.warning(coach_message)
+            st.caption(f"Response source: {response_source}")
+
+        with st.expander("Coach Debug Info"):
+            st.write("Response source:", response_source)
+            st.write("Response reason:", response_reason)
+            st.write("ENABLE_SPECIALIZED_COACH:", os.getenv("ENABLE_SPECIALIZED_COACH", "<not set>"))
+            st.write("GOOGLE_API_KEY set:", bool(os.getenv("GOOGLE_API_KEY")))
+            st.write("GEMINI_MODEL:", os.getenv("GEMINI_MODEL", "<default>"))
 
         st.session_state.score = update_score(
             current_score=st.session_state.score,
