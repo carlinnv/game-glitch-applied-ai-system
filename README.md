@@ -31,4 +31,4 @@ The tests confirmed that the guessing logic returns the correct outcomes and tha
 
 ## Reflection
 
-This project showed how AI can be useful for both fixing bugs and improving the player experience, but only when its output is carefully constrained. Moving the logic out of the interface made the codebase more maintainable and gave me a clean place to test the game rules. It also reinforced that AI features need guardrails and fallback paths so the app remains dependable for users.
+This project showed how AI can be useful for both fixing bugs and improving the player experience, but only when its output is carefully constrained. I also learned that the AI prompt and guardrails must go through several iterations of testing in order to get the ideal result. Moving the logic out of the interface made the codebase more maintainable and gave me a clean place to test the game rules. It also reinforced that AI features need guardrails and fallback paths so the app remains dependable for users.
