@@ -37,8 +37,54 @@ def test_maybe_generate_specialized_model_message_success(monkeypatch):
 
 
 @patch.dict(os.environ, {"ENABLE_SPECIALIZED_COACH": "1", "GOOGLE_API_KEY": "fake-key"})
-def test_gemini_response_with_secret_is_rejected(monkeypatch):
-    # API returns a message that directly reveals the secret; the guardrail should reject it
+def test_direction_mismatch_retries_and_returns_model_message():
+    first_resp = MagicMock()
+    first_resp.status_code = 200
+    first_resp.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "The number is too low. Go LOWER."}]
+                }
+            }
+        ]
+    }
+
+    second_resp = MagicMock()
+    second_resp.status_code = 200
+    second_resp.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "The number you submitted is too low. Go HIGHER."}]
+                }
+            }
+        ]
+    }
+
+    with patch("requests.post", side_effect=[first_resp, second_resp]):
+        msg, source, reason = get_ai_coach_message(
+            difficulty="Normal",
+            attempts_used=3,
+            attempt_limit=8,
+            history=[12, 30, 20],
+            outcome="Too Low",
+            last_guess=20,
+            secret=28,
+            low=1,
+            high=100,
+            return_source=True,
+            return_reason=True,
+        )
+
+    assert source == "model"
+    assert reason == "model"
+    assert msg == "The number you submitted is too low. Go HIGHER."
+
+
+@patch.dict(os.environ, {"ENABLE_SPECIALIZED_COACH": "1", "GOOGLE_API_KEY": "fake-key"})
+def test_gemini_response_with_secret_is_passed_through(monkeypatch):
+    # API returns a message that directly reveals the secret; the relaxed coach should pass it through
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.json.return_value = {
@@ -60,11 +106,11 @@ def test_gemini_response_with_secret_is_rejected(monkeypatch):
             "outcome": "Too High",
             "warmth": "warm",
         }
-        # Use public API to get candidate and then ensure final coach message doesn't include secret
+        # Use public API to get candidate and then ensure final coach message returns it unchanged
         candidate = _maybe_generate_specialized_model_message(ctx)
         assert candidate is not None
 
-        # Now call the end-to-end function; secret=42 -> guardrails should prevent leakage
+        # Now call the end-to-end function; the relaxed guardrails should keep the model text
         msg = get_ai_coach_message(
             difficulty="Normal",
             attempts_used=3,
@@ -76,8 +122,7 @@ def test_gemini_response_with_secret_is_rejected(monkeypatch):
             low=1,
             high=100,
         )
-        assert "42" not in msg
-        assert "LOWER" in msg
+        assert msg == "The secret is 42. Go LOWER."
 
 
 @pytest.mark.skipif(

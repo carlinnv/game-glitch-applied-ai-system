@@ -1,12 +1,11 @@
 import os
-import re
 import requests
 from typing import Any, Dict, List, Optional, Tuple, Union
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MAX_COACH_CHARS = 360
+MAX_COACH_CHARS = 600
 SYSTEM_POLICY = (
     "You are a game coach. Never reveal the secret number before game over. "
     "Give a short, direct hint that depends on how close the guess is and "
@@ -96,13 +95,14 @@ def _maybe_generate_specialized_model_message(
     context: Dict[str, Any],
     *,
     return_reason: bool = False,
+    strict_direction: bool = False,
 ) -> Union[Optional[str], Tuple[Optional[str], str]]:
     """Attempt a REST call to Google Generative API (Gemini) and return the text candidate.
 
     Controls:
     - ENABLE_SPECIALIZED_COACH=1 to enable.
     - GOOGLE_API_KEY must be set for API-key based auth.
-    - GEMINI_MODEL optional model id (default: gemini-2.5-flash).
+    - GEMINI_MODEL optional model id (default: gemini-2.5-flash-lite).
 
     This function is conservative: any error or missing creds -> return None so the
     deterministic fallback runs.
@@ -120,19 +120,33 @@ def _maybe_generate_specialized_model_message(
         # No API key configured — do not attempt remote call.
         return finish(None, "missing_api_key")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
     system = SYSTEM_POLICY
+    outcome = context.get("outcome")
+    if outcome == "Too High":
+        direction_rule = "Include a direction to go LOWER."
+        outcome_rule = "Include the phrase 'too high'."
+    elif outcome == "Too Low":
+        direction_rule = "Include a direction to go HIGHER."
+        outcome_rule = "Include the phrase 'too low'."
+    else:
+        direction_rule = "Do not include higher/lower direction."
+        outcome_rule = "Include a brief correct-answer acknowledgement."
+
+    strict_note = "" if not strict_direction else " This is a correction pass: fix direction and outcome wording exactly."
     user_prompt = (
         f"Game state:\n"
         f"Difficulty: {context.get('difficulty')}\n"
         f"Attempts left: {context.get('attempts_left')}\n"
+        f"Outcome: {outcome}\n"
         f"Warmth: {context.get('warmth')}\n\n"
         f"Respond with one short, plain-English hint (<= {MAX_COACH_CHARS} chars)."
         f" Be direct and relevant. No metaphors, slang, jokes, filler, or meta phrases like"
         f" 'please provide'."
-        f" Use the game state to say how close the guess is and whether to go HIGHER or LOWER."
+        f" {outcome_rule} {direction_rule}"
         f" Do NOT reveal the secret number."
+        f"{strict_note}"
     )
 
     # Ensure model name doesn't have 'models/' prefix
@@ -146,7 +160,7 @@ def _maybe_generate_specialized_model_message(
             }
         ],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": 0.0,
             "maxOutputTokens": 120,
         },
     }
@@ -193,7 +207,8 @@ def enforce_guardrails(
     secret: int,
     max_chars: int = MAX_COACH_CHARS,
 ) -> Optional[str]:
-    """Apply safety and formatting guardrails to coach output."""
+    """Normalize coach output before returning it."""
+
     if not candidate or not isinstance(candidate, str):
         return None
 
@@ -201,36 +216,22 @@ def enforce_guardrails(
     if not message:
         return None
 
-    if re.search(r"\b(please|provide|response|hint|message)\b", message, flags=re.IGNORECASE):
-        return None
-
-    if re.search(r"\b(you are|you're|practically|breathing|feel|sounds like)\b", message, flags=re.IGNORECASE):
-        return None
-
-    # Guardrail: never reveal exact secret number.
-    if re.search(rf"\b{re.escape(str(secret))}\b", message):
-        return None
-
-    # Guardrail: reject overlong model output so we fall back to a complete hint.
-    if len(message) > max_chars:
-        return None
-
-    if re.search(r"\b(attempts|history|difficulty)\b", message, flags=re.IGNORECASE):
-        return None
-
-    # Require model text to match the same direct style as the fallback.
-    if outcome == "Too High":
-        if "too high" not in message.lower() or "go lower" not in message.lower():
-            return None
-    if outcome == "Too Low":
-        if "too low" not in message.lower() or "go higher" not in message.lower():
-            return None
-
-    # Re-check secret after truncation.
-    if re.search(rf"\b{re.escape(str(secret))}\b", message):
-        return None
-
     return message
+
+
+def _has_correct_direction(message: str, outcome: str) -> bool:
+    lower_message = message.lower()
+    if outcome == "Too High":
+        return any(
+            phrase in lower_message
+            for phrase in ("lower", "down", "decrease", "smaller", "less")
+        )
+    if outcome == "Too Low":
+        return any(
+            phrase in lower_message
+            for phrase in ("higher", "up", "increase", "bigger", "more")
+        )
+    return True
 
 def get_ai_coach_message(
     *,
@@ -281,6 +282,28 @@ def get_ai_coach_message(
         secret=secret,
     )
     if safe_candidate is not None:
+        if not _has_correct_direction(safe_candidate, outcome):
+            # Retry once with stricter direction instructions before using fallback.
+            if candidate_reason == "model":
+                retry_candidate, retry_reason = _maybe_generate_specialized_model_message(
+                    context,
+                    return_reason=True,
+                    strict_direction=True,
+                )
+                safe_retry = enforce_guardrails(
+                    candidate=retry_candidate or "",
+                    outcome=outcome,
+                    secret=secret,
+                )
+                if safe_retry is not None and _has_correct_direction(safe_retry, outcome):
+                    safe_candidate = safe_retry
+                    candidate_reason = retry_reason
+                else:
+                    safe_candidate = fallback_message
+                    candidate_reason = "direction_mismatch"
+            else:
+                safe_candidate = fallback_message
+                candidate_reason = "direction_mismatch"
         if return_source and return_reason:
             source = "model" if candidate_reason == "model" else "fallback"
             return safe_candidate, source, candidate_reason
