@@ -27,6 +27,12 @@ The diagram, which is located in the assets folder, shows the game starting with
 
 ![Sample Interaction 2](assets/Example_2.png)
 
+## Demo Video
+
+Watch a walkthrough of the game and AI coach in action:
+
+[Demo Video](https://www.loom.com/share/acb0124730d9480bac017a7297595f6f)
+
 ## Design Decisions
 
 I separated the core guessing rules into `logic_utils.py` so the app stays easier to read, easier to test, and easier to change without touching the Streamlit UI. I also built the AI coach with a deterministic fallback because the game should still work even if the Gemini API is unavailable or returns an unsafe response. The trade-off is that the AI hint system is a little more complex, but that complexity gives me better reliability, clearer guardrails, and a more flexible user experience.

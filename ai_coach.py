@@ -30,6 +30,24 @@ def detect_warmth(last_guess: int, secret: int, low: int, high: int) -> str:
     return "cold"
 
 
+def _distance_descriptor(last_guess: int, secret: int, low: int, high: int) -> str:
+    """Generate a descriptive phrase about how close the guess is to secret."""
+    span = max(1, high - low)
+    distance = abs(last_guess - secret)
+
+    if distance == 0:
+        return ""
+
+    ratio = distance / span
+    if ratio <= 0.05:
+        return "very close to"
+    if ratio <= 0.15:
+        return "close to"
+    if ratio <= 0.30:
+        return "somewhat close to"
+    return "fairly far from"
+
+
 def build_coach_context(
     *,
     difficulty: str,
@@ -38,6 +56,7 @@ def build_coach_context(
     history: List[Any],
     outcome: str,
     warmth: str,
+    distance_descriptor: str = "",
 ) -> Dict[str, Any]:
     """Build model-ready context from current game state."""
     return {
@@ -48,6 +67,7 @@ def build_coach_context(
         "recent_history": history[-5:],
         "outcome": outcome,
         "warmth": warmth,
+        "distance_descriptor": distance_descriptor,
     }
 
 
@@ -71,24 +91,31 @@ def _natural_direction_message(
     warmth: str,
     attempts_used: int,
     attempt_limit: int,
+    distance_descriptor: str = "",
 ) -> str:
     if outcome == "Win":
         return "Correct. Nice work."
 
     if outcome == "Too High":
-        direction_sentence = "The number you submitted is too high. Go LOWER."
+        direction_action = "guess lower"
     else:
-        direction_sentence = "The number you submitted is too low. Go HIGHER."
+        direction_action = "guess higher"
 
     if warmth == "exact":
-        return direction_sentence
+        return f"Your guess is exact. (This shouldn't happen—you won!)"
+    
+    if distance_descriptor:
+        if outcome == "Win":
+            return "Correct. Nice work."
+        return f"Your guess is {distance_descriptor} the secret. {direction_action.capitalize()}."
+    
     if warmth == "hot":
-        return f"You're very close. {direction_sentence}"
+        return f"Your guess is very close. {direction_action.capitalize()}."
     if warmth == "warm":
-        return f"You're close. {direction_sentence}"
+        return f"Your guess is close. {direction_action.capitalize()}."
     if attempts_used >= attempt_limit:
-        return f"Last try. {direction_sentence}"
-    return direction_sentence
+        return f"Last try. {direction_action.capitalize()}."
+    return f"{direction_action.capitalize()}."
 
 
 def _maybe_generate_specialized_model_message(
@@ -124,15 +151,19 @@ def _maybe_generate_specialized_model_message(
 
     system = SYSTEM_POLICY
     outcome = context.get("outcome")
+    distance_descriptor = context.get("distance_descriptor", "")
+    distance_hint = f" The guess is {distance_descriptor} the secret." if distance_descriptor else ""
+    
     if outcome == "Too High":
-        direction_rule = "Include a direction to go LOWER."
-        outcome_rule = "Include the phrase 'too high'."
+        direction_rule = "Indicate they should go lower."
+        outcome_rule = "Convey that the guess is too high."
     elif outcome == "Too Low":
-        direction_rule = "Include a direction to go HIGHER."
-        outcome_rule = "Include the phrase 'too low'."
+        direction_rule = "Indicate they should go higher."
+        outcome_rule = "Convey that the guess is too low."
     else:
         direction_rule = "Do not include higher/lower direction."
-        outcome_rule = "Include a brief correct-answer acknowledgement."
+        outcome_rule = "Provide a brief congratulatory message."
+        distance_hint = ""
 
     strict_note = "" if not strict_direction else " This is a correction pass: fix direction and outcome wording exactly."
     user_prompt = (
@@ -140,7 +171,7 @@ def _maybe_generate_specialized_model_message(
         f"Difficulty: {context.get('difficulty')}\n"
         f"Attempts left: {context.get('attempts_left')}\n"
         f"Outcome: {outcome}\n"
-        f"Warmth: {context.get('warmth')}\n\n"
+        f"Warmth: {context.get('warmth')}{distance_hint}\n\n"
         f"Respond with one short, plain-English hint (<= {MAX_COACH_CHARS} chars)."
         f" Be direct and relevant. No metaphors, slang, jokes, filler, or meta phrases like"
         f" 'please provide'."
@@ -160,7 +191,7 @@ def _maybe_generate_specialized_model_message(
             }
         ],
         "generationConfig": {
-            "temperature": 0.0,
+            "temperature": 0.6,
             "maxOutputTokens": 120,
         },
     }
@@ -255,6 +286,7 @@ def get_ai_coach_message(
     model path failed or what path produced the response.
     """
     warmth = detect_warmth(last_guess=last_guess, secret=secret, low=low, high=high)
+    distance_descriptor = _distance_descriptor(last_guess=last_guess, secret=secret, low=low, high=high)
     context = build_coach_context(
         difficulty=difficulty,
         attempts_used=attempts_used,
@@ -262,12 +294,14 @@ def get_ai_coach_message(
         history=history,
         outcome=outcome,
         warmth=warmth,
+        distance_descriptor=distance_descriptor,
     )
 
     fallback_message = _natural_direction_message(
         attempts_used=attempts_used,
         attempt_limit=attempt_limit,
         outcome=outcome,
+        distance_descriptor=distance_descriptor,
         warmth=warmth,
     )
 
